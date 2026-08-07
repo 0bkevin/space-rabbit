@@ -179,23 +179,26 @@ once an action is about to happen, never per event:
 
 ### Optional Instant Mission Control (`SwipeIntercept.swift`)
 
-The upward Mission Control gesture is a vertical DockSwipe (`motion = 2`) with
-the `kIOHIDSwipeUp` mask. When enabled, its Began event is replaced by an
-immediate synthetic Began+Changed+Ended sequence whose Changed phase is already
-at its committed progress (`+1.0` before macOS 27, `-1.0` on the inverted 27+
-posting path). The Ended phase carries the same signed velocity on both X and Y,
-matching physical vertical captures. This commits the interactive transition
-before a slide is displayed; Mission Control itself is unchanged.
+Mission Control uses vertical DockSwipes (`motion = 2`) with `kIOHIDSwipeUp` to
+enter and `kIOHIDSwipeDown` to leave. When enabled, a supported Began event is
+replaced by an immediate synthetic Began+Changed+Ended sequence whose Changed
+phase is already at its committed progress. Before macOS 27, entry uses `+1.0`
+and dismissal `-1.0`; the augmented 27+ posting path inverts both signs. The
+Ended phase carries the same signed velocity on both X and Y, matching physical
+vertical captures. This commits the interactive transition before a slide is
+displayed; Mission Control itself is unchanged.
 
 All phases and companion envelopes are created before the real Began is
 swallowed. On macOS 27+, each dock event is also rebuilt with the validated
 field-4205 IOHID payload. Any allocation/augmentation failure returns `false`
 without posting a partial sequence, so the original physical gesture passes to
-macOS. Ambiguous and downward vertical gestures pass through as well. Once an
-upward sequence is claimed, its remaining physical dock/envelope events are
-swallowed until Ended/Cancelled. `isMissionControlActive()` prevents interception
-after the overview opens, preserving native dismissal and the issue #18/#20
-stand-down behavior.
+macOS. Ambiguous gestures pass through. Entry is claimed only when no overview
+is active. Dismissal is claimed only when `SLSCopySpaces` and
+`SLSSpaceCopyName` confirm that the active OS-managed space is
+`mission-control`; App Exposé (`show-front`), Show Desktop, and API failures stay
+native. Once a sequence is claimed, its remaining physical dock/envelope events
+are swallowed until Ended/Cancelled. Horizontal gestures still use the broader
+`isMissionControlActive()` stand-down, preserving issues #18 and #20.
 
 The feature is opt-in and independent from horizontal trackpad swipes and the
 Space transition-speed slider. `DockPreferences.swift` now only restores the
@@ -212,6 +215,8 @@ the active feature writes no macOS preference and needs no Dock restart.
 | `CGSGetActiveSpace` | `cgsGetActiveSpace` | `(cid) -> UInt64` | Active space ID on main display |
 | `CGSCopyManagedDisplaySpaces` | `cgsCopyDisplaySpaces` | `(cid, displayUUID?) -> CFArray?` | All displays + their spaces |
 | `SLSCopySpacesForWindows` | `slsCopySpacesForWindows` | `(cid, spaceType, windowIDs) -> CFArray?` | Maps window IDs → space IDs |
+| `SLSCopySpaces` | `slsCopySpaces` | `(cid, mask) -> CFArray?` | Lists current OS-managed overview spaces |
+| `SLSSpaceCopyName` | `slsSpaceCopyName` | `(cid, spaceID) -> CFString?` | Distinguishes `mission-control` from `show-front` |
 
 **Do not use `CGSManagedDisplaySetCurrentSpace`:** it was tried for instant cross-display switching and reverted. It flips the window server's current-space pointer without running the real transition, desyncing state — target-space windows composite on top of the still-displayed space (worst with fullscreen spaces), and subsequent edge bounds-checks read the stale pointer and overshoot into a black non-existent space.
 
@@ -315,7 +320,7 @@ All runtime state is module-level globals (not a singleton class). This is inten
 | `gInstantSwitchEnabled` | `Bool` | Feature 1 toggle |
 | `gAutoFollowEnabled` | `Bool` | Feature 2 toggle |
 | `gTrackpadSwipeEnabled` | `Bool` | Feature 3 toggle (default **false** — opt-in) |
-| `gInstantMissionControlEnabled` | `Bool` | Upward Mission Control gesture toggle (default **false** — opt-in) |
+| `gInstantMissionControlEnabled` | `Bool` | Mission Control entry/dismissal gesture toggle (default **false** — opt-in) |
 | `gSwipeTracking` / `gSwipeFired` / `gMissionControlSwipeTracking` | `Bool` | Per-gesture state of the swipe intercept (reset via `resetSwipeIntercept()`) |
 | `gSwitchSpeed` | `Double` | Transition speed slider tick (0.0–1.0 in 0.25 steps; 0.0 = native macOS animation, 1.0 = instant) |
 | `gLastSpaceSwitchTime` | `Date` | For auto-follow suppression (initialized to `.distantPast`). Stamped by Features 1/3 and by non-auto-follow space changes |
@@ -352,7 +357,7 @@ Persistence strategy: `flushSwitchCount()` writes to disk only if `gSwitchCount 
 | `kAutoFollowSelfChangeWindow` | AutoFollow | `1.5` (TimeInterval) | How long `gAutoFollowTargetSpace` stays credible as the cause of a space-change notification |
 | `kMissionControlWindowLayer` | SpaceSwitching | `18` (Int32) | `kCGWindowLayer` of the Dock's overview overlay — the Mission Control marker |
 | `kGestureMotionHorizontal` / `kGestureMotionVertical` | SwipeIntercept | `1` / `2` (Int64) | `kCGEventGestureSwipeMotion` values used to distinguish Space and Mission Control swipes |
-| `kSwipeMaskUp` | SwipeIntercept | `1` (Int64) | IOHID direction mask used to claim only the upward Mission Control gesture |
+| `kSwipeMaskUp` / `kSwipeMaskDown` | SwipeIntercept | `1` / `2` (Int64) | IOHID direction masks for Mission Control entry and dismissal |
 | `kSyntheticGestureMarker` | SwipeIntercept | `0x53504152` ('SPAR') | Stamped into `.eventSourceUserData` on every gesture Space Rabbit posts, so the swipe tap passes its own events through |
 | `kCGSGesturePhaseCancelled` | PrivateAPI | `8` (Int64) | Gesture phase seen only by the swipe-intercept tap |
 | `kCursorWarpRestoreDelay` | SpaceSwitching | `0.15` (TimeInterval) | How long the cursor stays parked on the target display after a cross-display warp switch (the Dock samples the cursor asynchronously) |
@@ -774,7 +779,7 @@ App/
   EventTap.swift        — CGEvent tap callback (Feature 1: instant switch)
   AutoFollow.swift      — app-activation observer (Feature 2: auto-follow)
   SwipeIntercept.swift  — shared gesture tap for horizontal Space swipes and
-                          upward Instant Mission Control
+                          Instant Mission Control entry/dismissal
   MenuBar.swift         — SwoopMenu status item and dropdown menu
   Settings.swift        — preferences window and all settings panes
   DockPreferences.swift — one-time cleanup for the early issue #28 test build

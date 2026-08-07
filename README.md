@@ -11,7 +11,7 @@ Space Rabbit removes animations when switching macOS Spaces. Reclaim hours of yo
 - ✅ **Instant space switch** - your keyboard shortcut switches spaces with zero animation
 - ✅ **Auto-follow on Cmd+Tab** - switching to an app on another space takes you there instantly
 - ✅ **Instant trackpad swipe** - your trackpad swipe switches spaces with zero animation too
-- ✅ **Instant Mission Control** - your upward trackpad gesture opens Mission Control immediately
+- ✅ **Instant Mission Control** - trackpad gestures enter and leave Mission Control immediately
 - ✅ **Reads your shortcuts** - picks up your bindings from System Settings automatically
 - ✅ **Tiny native macOS app** - 2MB binary size, 12MB memory usage, zero CPU usage
 - ✅ **No system changes needed for core features** - just classic accessibility permissions

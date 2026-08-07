@@ -107,7 +107,7 @@
 
 "settings.advanced.instantDockHide" = "即时隐藏程序坞";
 "settings.advanced.instantMissionControl" = "即时 Mission Control";
-"settings.advanced.missionControlSubtitle" = "替换触控板向上轻扫手势并立即打开 Mission Control。";
+"settings.advanced.missionControlSubtitle" = "使用触控板手势立即进入和退出 Mission Control。";
 "settings.advanced.dockSubtitle" = "这会更改 macOS 的一项全局设置。";
 "settings.advanced.resetToDefault" = "恢复为系统默认值";
 

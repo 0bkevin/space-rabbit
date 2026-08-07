@@ -104,7 +104,7 @@
 
 "settings.advanced.instantDockHide" = "Instant Dock hide";
 "settings.advanced.instantMissionControl" = "Instant Mission Control";
-"settings.advanced.missionControlSubtitle" = "Replaces the upward trackpad gesture and opens Mission Control immediately.";
+"settings.advanced.missionControlSubtitle" = "Trackpad gestures enter and leave Mission Control immediately.";
 "settings.advanced.dockSubtitle" = "This changes a global macOS setting.";
 "settings.advanced.resetToDefault" = "Reset to system default";
 

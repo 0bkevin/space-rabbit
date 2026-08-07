@@ -42,9 +42,10 @@ private let kInstantSwitchVelocity: Double = 400.0
 /// progress move right, positive move left.
 private let kAugmentedInstantVelocity: Double = 9999.0
 
-/// DockSwipe motion and IOHID mask values for opening Mission Control.
+/// DockSwipe motion and IOHID mask values for Mission Control transitions.
 private let kGestureMotionVertical: Int64 = 2
 private let kIOHIDSwipeUp: Int64 = 1
+private let kIOHIDSwipeDown: Int64 = 2
 
 /// Velocity range for animated (non-instant) switches, mapped from the
 /// user's transition-speed slider. Calibrated against InstantSpaceSwitcher's
@@ -247,6 +248,10 @@ func getAllCurrentSpaces() -> [CGSSpaceID] {
 /// Nothing else the Dock owns sits at that layer.
 private let kMissionControlWindowLayer: Int32 = 18
 
+/// Private `CGSSpaceMask` selecting current OS-managed spaces (Dock overview
+/// spaces rather than user desktops): IncludesCurrent | IncludesOS.
+private let kCurrentOSSpacesMask: Int32 = (1 << 0) | (1 << 3)
+
 /// Whether a Mission Control-style overview (Mission Control, App Exposé,
 /// Show Desktop) is currently on screen.
 ///
@@ -279,6 +284,43 @@ func isMissionControlActive() -> Bool {
     }
 
     return false
+}
+
+/// Whether the active Dock overview is Mission Control specifically.
+///
+/// The layer-18 marker above intentionally groups Mission Control, App Exposé,
+/// and Show Desktop because all three require horizontal navigation to stand
+/// down. Vertical dismissal is narrower: only Mission Control should turn a
+/// downward swipe into a completed gesture toward the desktop. WindowServer
+/// represents the modes as current OS-managed spaces named `mission-control`
+/// and `show-front`; unknown or unavailable private APIs fail closed.
+func isMissionControlOverviewActive() -> Bool {
+    guard let mainConnection = cgsMainConnection,
+          let copySpaces = slsCopySpaces,
+          let copyName = slsSpaceCopyName else { return false }
+
+    let cid = mainConnection()
+    guard cid != 0,
+          let spaces = copySpaces(cid, kCurrentOSSpacesMask)?
+              .takeRetainedValue() as? [NSNumber] else { return false }
+
+    var missionControlVisible = false
+    var appExposeVisible = false
+
+    for space in spaces {
+        let spaceID = space.uint64Value
+        guard spaceID != 0,
+              let name = copyName(cid, spaceID)?.takeRetainedValue() as String?
+        else { continue }
+
+        if name == "mission-control" {
+            missionControlVisible = true
+        } else if name == "show-front" {
+            appExposeVisible = true
+        }
+    }
+
+    return missionControlVisible && !appExposeVisible
 }
 
 // MARK: - Window-to-Space Mapping
@@ -764,20 +806,21 @@ private func augmentDockSwipeEvent(_ event: CGEvent) -> CGEvent? {
 
 // MARK: - Instant Mission Control Gesture
 
-/// Creates one phase of an upward vertical DockSwipe at its committed
-/// endpoint. Pre-27 trackpad captures use positive progress for Mission
-/// Control and carry the same signed velocity on both axes when ending. The
-/// macOS 27+ augmented path uses that release's inverted posting sign, matching
-/// the horizontal augmented gesture immediately below.
+/// Creates one phase of a vertical DockSwipe at its committed endpoint.
+/// Pre-27 trackpad captures use positive progress to enter Mission Control and
+/// negative progress to leave it, carrying the same signed velocity on both
+/// axes when ending. The macOS 27+ augmented path inverts those posting signs,
+/// matching the horizontal augmented gesture immediately below.
 ///
 /// On macOS 27+, the extra mirrored fields are included before field 4205 is
 /// generated. Earlier releases ignore those requirements and receive the bare
 /// event, matching Space Rabbit's existing version split for horizontal swipes.
-private func makeMissionControlDockEvent(phase: Int64,
+private func makeMissionControlDockEvent(phase: Int64, opening: Bool,
                                          augmented: Bool) -> CGEvent? {
     guard let event = CGEvent(source: nil) else { return nil }
 
-    let sign = augmented ? -1.0 : 1.0
+    let direction = opening ? 1.0 : -1.0
+    let sign = augmented ? -direction : direction
     // macOS 27 validates non-zero progress on every augmented phase. Earlier
     // Docks accept a zero-progress Began, matching a physical vertical swipe.
     let progress = !augmented && phase == kCGSGesturePhaseBegan ? 0.0 : sign
@@ -788,7 +831,8 @@ private func makeMissionControlDockEvent(phase: Int64,
     event.setIntegerValueField(kCGEventGestureHIDType, value: kIOHIDEventTypeDockSwipe)
     event.setIntegerValueField(kCGEventGesturePhase, value: phase)
     event.setIntegerValueField(kCGEventGestureSwipeMotion, value: kGestureMotionVertical)
-    event.setIntegerValueField(kCGEventGestureSwipeMask, value: kIOHIDSwipeUp)
+    event.setIntegerValueField(kCGEventGestureSwipeMask,
+                               value: opening ? kIOHIDSwipeUp : kIOHIDSwipeDown)
     event.setDoubleValueField(kCGEventGestureSwipeProgress, value: progress)
 
     if phase == kCGSGesturePhaseEnded {
@@ -804,7 +848,12 @@ private func makeMissionControlDockEvent(phase: Int64,
                                   value: Double(mach_absolute_time()))
         event.setDoubleValueField(kCGEventGesturePositionY, value: 0.1)
     } else {
-        event.setIntegerValueField(kCGEventScrollGestureFlagBits, value: 1)
+        let flag = opening
+            ? Float.leastNonzeroMagnitude : -Float.leastNonzeroMagnitude
+        event.setIntegerValueField(
+            kCGEventScrollGestureFlagBits,
+            value: Int64(UInt64(flag.bitPattern))
+        )
         event.setDoubleValueField(kCGEventGestureScrollY, value: 0)
         event.setDoubleValueField(
             kCGEventGestureZoomDeltaX,
@@ -815,7 +864,7 @@ private func makeMissionControlDockEvent(phase: Int64,
     return event
 }
 
-/// Posts an immediate upward gesture that opens Mission Control.
+/// Posts an immediate vertical gesture that enters or leaves Mission Control.
 ///
 /// Every phase and companion envelope is allocated (and, on macOS 27+,
 /// augmented) before the first event is posted. This all-or-nothing setup lets
@@ -824,7 +873,7 @@ private func makeMissionControlDockEvent(phase: Int64,
 ///
 /// - Returns: `true` after the full Began/Changed/Ended sequence was posted;
 ///            otherwise `false` without posting any partial sequence.
-func postInstantMissionControlGesture() -> Bool {
+func postInstantMissionControlGesture(opening: Bool) -> Bool {
     let needsAugmentation = requiresEventAugmentation()
     let phases = [kCGSGesturePhaseBegan, kCGSGesturePhaseChanged,
                   kCGSGesturePhaseEnded]
@@ -833,6 +882,7 @@ func postInstantMissionControlGesture() -> Bool {
     for phase in phases {
         guard let rawDock = makeMissionControlDockEvent(
             phase: phase,
+            opening: opening,
             augmented: needsAugmentation
         ) else { return false }
 

@@ -49,8 +49,8 @@ var gAutoFollowEnabled: Bool = true
 /// purely additive features above. Only effective when `gEnabled` is `true`.
 var gTrackpadSwipeEnabled: Bool = false
 
-/// Intercept the upward trackpad gesture and replace it with a completed
-/// vertical DockSwipe so Mission Control opens without its initial slide.
+/// Intercept Mission Control's upward and downward trackpad gestures and
+/// replace them with completed vertical DockSwipes so both transitions snap.
 /// Independent from the horizontal trackpad-swipe feature.
 var gInstantMissionControlEnabled: Bool = false
 
@@ -106,7 +106,7 @@ var gSwipeTracking: Bool = false
 /// (fires once per gesture, on the first Changed with non-zero progress).
 var gSwipeFired: Bool = false
 
-/// Whether an upward Mission Control swipe has been replaced and the rest of
+/// Whether a Mission Control swipe has been replaced and the rest of
 /// its physical event sequence must be swallowed.
 var gMissionControlSwipeTracking: Bool = false
 

@@ -8,6 +8,7 @@
  *   - Construct synthetic DockSwipe gesture events (the CGEvent field IDs)
  *   - Query the current space and enumerate all spaces per display (CGS functions)
  *   - Map window IDs to the space they belong to (SLSCopySpacesForWindows)
+ *   - Distinguish Mission Control from other Dock overview modes
  *
  * These are the main fragility points of the app — they rely on
  * implementation details of macOS that may change in future releases.
@@ -182,6 +183,15 @@ typealias FnDisplaySpaces    = @convention(c) (CGSConnectionID, CFString?) -> Un
 /// `spaceType` is a bitmask (7 = all space types).
 typealias FnSpacesForWindows = @convention(c) (CGSConnectionID, Int32, CFArray) -> Unmanaged<CFArray>?
 
+/// `SLSCopySpaces(cid, mask) -> CFArray?`
+/// Returns space IDs matching a private `CGSSpaceMask` bitmask.
+typealias FnCopySpaces       = @convention(c) (CGSConnectionID, Int32) -> Unmanaged<CFArray>?
+
+/// `SLSSpaceCopyName(cid, spaceID) -> CFString?`
+/// Returns the internal name of an OS-managed space, such as
+/// `mission-control` or `show-front`.
+typealias FnSpaceCopyName    = @convention(c) (CGSConnectionID, CGSSpaceID) -> Unmanaged<CFString>?
+
 // MARK: - Runtime Symbol Resolution
 //
 // We load private symbols from the WindowServer framework using dlsym
@@ -214,6 +224,12 @@ let cgsCopyDisplaySpaces:    FnDisplaySpaces?     = loadSymbol("CGSCopyManagedDi
 
 /// Maps window IDs to the spaces they live on.
 let slsCopySpacesForWindows: FnSpacesForWindows?  = loadSymbol("SLSCopySpacesForWindows")
+
+/// Lists spaces matching a `CGSSpaceMask`.
+let slsCopySpaces:           FnCopySpaces?         = loadSymbol("SLSCopySpaces")
+
+/// Returns an OS-managed space's internal name.
+let slsSpaceCopyName:        FnSpaceCopyName?      = loadSymbol("SLSSpaceCopyName")
 
 // NOTE: CGSManagedDisplaySetCurrentSpace was tried for cross-display
 // switching and removed — it desyncs window-server state (see the

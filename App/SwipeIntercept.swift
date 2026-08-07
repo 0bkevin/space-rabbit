@@ -2,7 +2,7 @@
  * SwipeIntercept.swift — Instant trackpad gesture interception
  *
  * Removes the slide animation from real horizontal Space swipes and the
- * upward Mission Control gesture.
+ * Mission Control entry and dismissal gestures.
  *
  * macOS turns 3-finger (or 4-finger, per the trackpad setting) swipes into
  * private DockSwipe events — the same event family Space Rabbit synthesizes
@@ -17,11 +17,11 @@
  *                skip Changed), use the final velocity's sign; reset
  *   4. Cancelled — reset without firing
  *
- * Horizontal swipes keep the existing direction-detection flow. An upward
- * vertical swipe is identifiable from the Began event's swipe mask/flags, so
- * its replacement is prepared and posted before the native transition gets
- * a progress sample. Downward App Expose and Mission Control dismissal pass
- * through unchanged.
+ * Horizontal swipes keep the existing direction-detection flow. A vertical
+ * swipe is identifiable from the Began event's swipe mask/flags, so its
+ * replacement is prepared and posted before the native transition gets a
+ * progress sample. Downward App Exposé from the desktop remains native;
+ * downward dismissal is claimed only when Mission Control is active.
  *
  * Because Space Rabbit's own synthetic gestures are posted into the same
  * session tap, they would loop right back into this tap. Every event we
@@ -52,8 +52,9 @@ private let kGestureMotionHorizontal: Int64 = 1
 /// and App Exposé.
 private let kGestureMotionVertical: Int64 = 2
 
-/// IOHID swipe-mask bit identifying the upward (Mission Control) direction.
+/// IOHID swipe-mask bits identifying vertical gesture direction.
 private let kSwipeMaskUp: Int64 = 1
+private let kSwipeMaskDown: Int64 = 2
 
 // MARK: - Tap Lifecycle
 
@@ -184,7 +185,7 @@ func swipeTapCallback(proxy: CGEventTapProxy, type: CGEventType,
         return passthrough
     }
 
-    // Once an upward swipe is claimed, swallow every remaining dock and
+    // Once a Mission Control transition is claimed, swallow every remaining dock and
     // companion event from that physical sequence. The synthetic replacement
     // has already delivered its own complete Began/Changed/Ended sequence.
     if gMissionControlSwipeTracking {
@@ -198,21 +199,27 @@ func swipeTapCallback(proxy: CGEventTapProxy, type: CGEventType,
         if subtype == kCGSEventGesture { return nil }
     }
 
-    // Vertical DockSwipes use positive progress for upward Mission Control
-    // and negative progress for downward App Exposé. Only claim the upward
-    // Began event; once Mission Control is open, isMissionControlActive()
-    // makes dismissal gestures pass through untouched (issues #18 and #20).
+    // Claim upward swipes only from the desktop, and downward swipes only
+    // while Mission Control specifically (not App Exposé or Show Desktop) is
+    // active. Horizontal gestures still stand down in every overview, keeping
+    // the issue #18/#20 safety behavior intact.
     if gInstantMissionControlEnabled,
        subtype == kCGSEventDockControl,
        event.getIntegerValueField(kCGEventGestureHIDType) == kIOHIDEventTypeDockSwipe,
        event.getIntegerValueField(kCGEventGestureSwipeMotion) == kGestureMotionVertical,
        event.getIntegerValueField(kCGEventGesturePhase) == kCGSGesturePhaseBegan,
-       isUpwardSwipe(event),
-       !isMissionControlActive() {
+       let opening = verticalSwipeOpensMissionControl(event) {
+        let overviewActive = isMissionControlActive()
+        let shouldHandle = opening
+            ? !overviewActive
+            : overviewActive && isMissionControlOverviewActive()
+
+        guard shouldHandle else { return passthrough }
+
         // postInstantMissionControlGesture() constructs every phase before it
         // posts anything. If construction or augmentation fails, leave the
         // physical Began untouched so macOS performs its native transition.
-        if postInstantMissionControlGesture() {
+        if postInstantMissionControlGesture(opening: opening) {
             gMissionControlSwipeTracking = true
             return nil
         }
@@ -299,18 +306,21 @@ func swipeTapCallback(proxy: CGEventTapProxy, type: CGEventType,
     return passthrough
 }
 
-/// Returns whether a vertical Began event targets Mission Control (upward).
+/// Returns whether a vertical Began event opens (`true`) or dismisses (`false`)
+/// Mission Control, or `nil` when its direction is ambiguous.
 ///
 /// Current macOS releases expose direction in the IOHID swipe mask. Events
 /// that omit it encode a signed `Float` in field 135; its sign follows the
 /// same macOS 27 inversion as other real DockSwipes. An ambiguous Began is
 /// never intercepted.
-private func isUpwardSwipe(_ event: CGEvent) -> Bool {
+private func verticalSwipeOpensMissionControl(_ event: CGEvent) -> Bool? {
     let mask = event.getIntegerValueField(kCGEventGestureSwipeMask)
-    if mask != 0 { return mask & kSwipeMaskUp != 0 }
+    if mask & kSwipeMaskUp != 0 { return true }
+    if mask & kSwipeMaskDown != 0 { return false }
 
     let rawFlags = event.getIntegerValueField(kCGEventScrollGestureFlagBits)
     let flags = Float(bitPattern: UInt32(truncatingIfNeeded: rawFlags))
+    guard flags != 0 else { return nil }
     return requiresEventAugmentation() ? flags < 0 : flags > 0
 }
 
