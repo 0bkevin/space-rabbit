@@ -50,6 +50,11 @@ var gAutoFollowEnabled: Bool = true
 /// purely additive features above. Only effective when `gEnabled` is `true`.
 var gTrackpadSwipeEnabled: Bool = false
 
+/// Optional Dock preference: remove Mission Control's opening slide animation
+/// where the undocumented Dock key is honored. This is independent from the
+/// horizontal trackpad-swipe feature and has no event-interception fallback.
+var gInstantMissionControlEnabled: Bool = false
+
 /// Space-switch transition speed as a slider tick position (0.0–1.0 in
 /// steps of 0.25). 1.0 (the end cap) means instant — no animation at all.
 /// 0.0 ("Normal") means macOS's native animation: Space Rabbit posts no
@@ -156,6 +161,10 @@ enum Defaults {
     /// purpose — the feature was renamed to "Instant Trackpad Swipe", and
     /// renaming the key would silently reset the opt-in for existing users.
     static let trackpadSwipe    = "spacerabbit.threeFingerSwipe"
+    static let instantMissionControl = "spacerabbit.instantMissionControl"
+    /// A property-list dictionary containing the previous Dock value and an
+    /// explicit `wasSet` flag. It is absent when no restore cycle is pending.
+    static let instantMissionControlBackup = "spacerabbit.instantMissionControlBackup"
     static let switchSpeed      = "spacerabbit.switchSpeed"
     static let switchCount      = "spacerabbit.switchCount"
     /// When `false`, the rabbit icon is removed from the menu bar.

@@ -177,6 +177,25 @@ once an action is about to happen, never per event:
 - **Feature 2** — after the speed and suppression-window guards, before the
   window-to-space lookups.
 
+### Optional Instant Mission Control (`DockPreferences.swift`)
+
+This is separate from the three input features above. When enabled, the app
+writes the undocumented `expose-animation-duration` preference in the
+`com.apple.dock` domain to a conservative near-zero value. It does not
+intercept vertical gestures or alter Mission Control's controls after the
+overview opens, and macOS may ignore the preference while retaining native
+behavior.
+
+Before the first write in an enable cycle, the previous Dock value is saved in
+one `UserDefaults` property-list record with an explicit `wasSet` flag. Repeated
+syncs never replace that record. Disabling restores the saved value (including
+removing the key when it was previously unset); the explicit reset action
+instead removes the key to return to the system default. Both clear the record
+and ask for confirmation before running `/usr/bin/killall Dock`.
+Choosing “Later” leaves the preference pending restart, matching Instant Dock
+hide. The feature is opt-in and has its own menu and Advanced-pane toggles;
+horizontal trackpad swipe handling remains independent.
+
 ## Private APIs in use (`PrivateAPI.swift`)
 
 ### CGS functions (resolved via `loadSymbol()` / `dlsym` at startup)
@@ -749,7 +768,8 @@ App/
   SwipeIntercept.swift  — gesture tap intercepting real trackpad swipes
                           (Feature 3: instant trackpad swipe)
   MenuBar.swift         — SwoopMenu status item and dropdown menu
-  Settings.swift        — preferences window (General + About tabs) — largest file
+  Settings.swift        — preferences window and all settings panes
+  DockPreferences.swift  — optional Dock preference backup/restore and restart confirmation
   UpdateCheck.swift     — GitHub release version checking
   UpdateInstall.swift   — automatic update download, DMG install, and restart
   Info.plist            — bundle metadata (version placeholder: __VERSION__)

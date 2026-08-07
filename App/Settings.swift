@@ -7,7 +7,7 @@
  *
  *   Auto-Start — Launch at Login toggle (+ warning banner)
  *   Features   — Instant space switch, Auto-follow, Transition speed
- *   Advanced   — Dock instant-hide, menu bar icon visibility
+ *   Advanced   — Instant Mission Control, Dock instant-hide, menu bar icon visibility
  *   Updates    — Manual update check + manual-update notice
  *   About      — App icon, version, authors
  *
@@ -1039,7 +1039,8 @@ final class FeaturesPaneController: SettingsPaneViewController {
 
 // MARK: - Advanced Pane
 
-/// The "Advanced" pane: Dock instant-hide and menu bar icon visibility.
+/// The "Advanced" pane: Instant Mission Control, Dock instant-hide, and menu
+/// bar icon visibility.
 ///
 /// macOS supports a hidden preference `autohide-time-modifier` on com.apple.dock
 /// that controls the Dock show/hide animation speed. Setting it to 0.0 makes the
@@ -1051,9 +1052,12 @@ final class AdvancedPaneController: SettingsPaneViewController {
 
     override var paneTitle: String { SettingsPane.advanced.title }
 
+    private var instantMissionControlControl: NSSwitch!
     private var instantDockHideControl: NSSwitch!
     private var showMenuBarIconControl: NSSwitch!
     private var menuBarSubtitle:        NSTextField!
+    private var missionControlResetDivider: NSView!
+    private var missionControlResetRow:     NSView!
     private var dockResetDivider:       NSView!
     private var dockResetRow:           NSView!
 
@@ -1064,6 +1068,17 @@ final class AdvancedPaneController: SettingsPaneViewController {
     private let dockBundleID    = "com.apple.dock" as CFString
 
     override func buildContent() -> [NSView] {
+        let missionControlSubtitle = NSTextField(wrappingLabelWithString:
+            L("settings.advanced.missionControlSubtitle"))
+        missionControlSubtitle.font                    = .systemFont(ofSize: 11)
+        missionControlSubtitle.textColor               = .secondaryLabelColor
+        missionControlSubtitle.preferredMaxLayoutWidth = 240
+
+        instantMissionControlControl = makeSwitch(
+            gInstantMissionControlEnabled,
+            #selector(toggleInstantMissionControl)
+        )
+
         let dockSubtitle = NSTextField(wrappingLabelWithString:
             L("settings.advanced.dockSubtitle"))
         dockSubtitle.font                    = .systemFont(ofSize: 11)
@@ -1086,7 +1101,41 @@ final class AdvancedPaneController: SettingsPaneViewController {
         menuBarSubtitle.preferredMaxLayoutWidth = 240
         updateMenuBarSubtitle()
 
-        // "Reset to system default" link button (only visible when overridden)
+        // Mission Control reset link (only visible while an override exists)
+        let missionControlResetBtn = LinkButton(
+            title: "", target: self, action: #selector(resetMissionControlToDefault)
+        )
+        missionControlResetBtn.isBordered = false
+        missionControlResetBtn.attributedTitle = NSAttributedString(string: L("settings.advanced.resetToDefault"), attributes: [
+            .font:            NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.linkColor,
+        ])
+
+        let missionControlResetIcon = NSImageView()
+        missionControlResetIcon.image = NSImage(systemSymbolName: "arrow.clockwise",
+                                                accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .regular))
+        missionControlResetIcon.contentTintColor = .linkColor
+
+        let missionControlResetStack = NSStackView(views: [missionControlResetIcon, missionControlResetBtn])
+        missionControlResetStack.orientation = .horizontal
+        missionControlResetStack.spacing     = 2
+        missionControlResetStack.alignment   = .centerY
+        missionControlResetStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let missionControlResetRowView = NSView()
+        missionControlResetRowView.addSubview(missionControlResetStack)
+        NSLayoutConstraint.activate([
+            missionControlResetStack.trailingAnchor.constraint(equalTo: missionControlResetRowView.trailingAnchor,
+                                                                constant: -Layout.rowHorizontalPad),
+            missionControlResetStack.topAnchor.constraint(equalTo: missionControlResetRowView.topAnchor, constant: 4),
+            missionControlResetStack.bottomAnchor.constraint(equalTo: missionControlResetRowView.bottomAnchor, constant: -9),
+        ])
+
+        missionControlResetRow     = missionControlResetRowView
+        missionControlResetDivider = rowDivider()
+
+        // "Reset to system default" link for Instant Dock hide (only visible when overridden)
         let resetBtn = LinkButton(title: "", target: self, action: #selector(resetDockToDefault))
         resetBtn.isBordered = false
         resetBtn.attributedTitle = NSAttributedString(string: L("settings.advanced.resetToDefault"), attributes: [
@@ -1119,9 +1168,20 @@ final class AdvancedPaneController: SettingsPaneViewController {
         dockResetDivider = rowDivider()
 
         // Hidden by default; viewWillAppear sets the correct visibility
+        missionControlResetDivider.isHidden = true
+        missionControlResetRow.isHidden     = true
         dockResetDivider.isHidden = true
         dockResetRow.isHidden     = true
 
+        let missionControlGroup = groupBox([
+            settingsRow(
+                label:    L("settings.advanced.instantMissionControl"),
+                control:  instantMissionControlControl,
+                subtitle: missionControlSubtitle
+            ),
+            missionControlResetDivider,
+            missionControlResetRow,
+        ])
         let dockGroup = groupBox([
             settingsRow(
                 label:    L("settings.advanced.instantDockHide"),
@@ -1138,10 +1198,12 @@ final class AdvancedPaneController: SettingsPaneViewController {
                 subtitle: menuBarSubtitle
             ),
         ])
-        return [dockGroup, menuBarGroup]
+        return [missionControlGroup, dockGroup, menuBarGroup]
     }
 
     override func syncFromGlobals() {
+        instantMissionControlControl.state = gInstantMissionControlEnabled ? .on : .off
+        updateMissionControlResetLink()
         instantDockHideControl.state = isDockInstantHideEnabled() ? .on : .off
         let menuBarVisible = gMenu?.isMenuBarIconVisible
             ?? UserDefaults.standard.bool(forKey: Defaults.showMenuBarIcon)
@@ -1175,24 +1237,21 @@ final class AdvancedPaneController: SettingsPaneViewController {
         resizePaneToFit()
     }
 
-    /// Prompts the user to restart the Dock so the autohide change takes effect.
-    ///
-    /// The Dock must be restarted for preference changes to be picked up.
-    /// This shows an alert with "Restart Dock Now" and "Later" buttons.
-    private func promptDockRestart() {
-        let alert = NSAlert()
-        alert.messageText     = L("settings.advanced.dockRestart.title")
-        alert.informativeText = L("settings.advanced.dockRestart.message")
-        alert.addButton(withTitle: L("settings.advanced.dockRestart.confirm"))
-        alert.addButton(withTitle: L("common.later"))
-        alert.alertStyle = .informational
+    /// Shows the Mission Control reset link while a Dock override or pending
+    /// restore record exists.
+    private func updateMissionControlResetLink() {
+        let hasOverride = hasInstantMissionControlOverride()
+        missionControlResetDivider.isHidden = !hasOverride
+        missionControlResetRow.isHidden     = !hasOverride
+        resizePaneToFit()
+    }
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            let task = Process()
-            task.launchPath = "/usr/bin/killall"
-            task.arguments  = ["Dock"]
-            try? task.run()
-        }
+    @objc private func toggleInstantMissionControl() {
+        setInstantMissionControlEnabled(instantMissionControlControl.state == .on)
+    }
+
+    @objc private func resetMissionControlToDefault() {
+        resetInstantMissionControlToDefault()
     }
 
     @objc private func toggleDockInstantHide() {

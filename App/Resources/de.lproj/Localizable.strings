@@ -35,6 +35,7 @@
 /* Feature 3 toggle: replaces the animated trackpad swipe (3 or 4 fingers).
    No trailing glyph — the gesture it replaces has no keyboard shortcut. */
 "menu.instantTrackpadSwipe" = "Sofortiges Trackpad-Streichen";
+"menu.instantMissionControl" = "Mission Control sofort öffnen";
 
 /* Small grey section headings */
 "menu.section.configure" = "Konfigurieren:";
@@ -100,6 +101,8 @@
 /* --- Settings · Advanced ------------------------------------------------ */
 
 "settings.advanced.instantDockHide" = "Dock sofort ausblenden";
+"settings.advanced.instantMissionControl" = "Mission Control sofort öffnen";
+"settings.advanced.missionControlSubtitle" = "Öffnet Mission Control ohne die anfängliche Schiebeanimation. macOS kann diese undokumentierte Einstellung ignorieren.";
 "settings.advanced.dockSubtitle" = "Dies ändert eine globale macOS-Einstellung.";
 "settings.advanced.resetToDefault" = "Auf Standardwert zurücksetzen";
 

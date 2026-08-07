@@ -38,6 +38,7 @@
 /* Feature 3 toggle: replaces the animated trackpad swipe (3 or 4 fingers).
    No trailing glyph — the gesture it replaces has no keyboard shortcut. */
 "menu.instantTrackpadSwipe" = "Мгновенное смахивание на трекпаде";
+"menu.instantMissionControl" = "Мгновенный Mission Control";
 
 /* Small grey section headings */
 "menu.section.configure" = "Настройка:";
@@ -106,6 +107,8 @@
 /* --- Settings · Advanced ------------------------------------------------ */
 
 "settings.advanced.instantDockHide" = "Мгновенное скрытие Dock";
+"settings.advanced.instantMissionControl" = "Мгновенный Mission Control";
+"settings.advanced.missionControlSubtitle" = "Открывает Mission Control без начальной анимации сдвига. macOS может проигнорировать эту недокументированную настройку.";
 "settings.advanced.dockSubtitle" = "Это изменяет глобальную настройку macOS.";
 "settings.advanced.resetToDefault" = "Вернуть стандартное значение";
 
