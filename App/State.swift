@@ -19,10 +19,9 @@ import Foundation
 /// and re-enabled automatically if macOS disables it.
 var gTap: CFMachPort?
 
-/// The swipe-intercept CGEvent tap (Feature 3). Unlike `gTap`, this one is
-/// created and torn down on demand: it only exists while both the master
-/// switch and the trackpad-swipe feature are enabled (see `updateSwipeTap()`
-/// in SwipeIntercept.swift).
+/// The swipe-intercept CGEvent tap. Unlike `gTap`, this one is created and
+/// torn down on demand: it only exists while the master switch and at least
+/// one gesture-interception feature are enabled (see `updateSwipeTap()`).
 var gSwipeTap: CFMachPort?
 
 /// Run loop source backing `gSwipeTap`, kept so the source can be removed
@@ -50,9 +49,9 @@ var gAutoFollowEnabled: Bool = true
 /// purely additive features above. Only effective when `gEnabled` is `true`.
 var gTrackpadSwipeEnabled: Bool = false
 
-/// Optional Dock preference: remove Mission Control's opening slide animation
-/// where the undocumented Dock key is honored. This is independent from the
-/// horizontal trackpad-swipe feature and has no event-interception fallback.
+/// Intercept the upward trackpad gesture and replace it with a completed
+/// vertical DockSwipe so Mission Control opens without its initial slide.
+/// Independent from the horizontal trackpad-swipe feature.
 var gInstantMissionControlEnabled: Bool = false
 
 /// Space-switch transition speed as a slider tick position (0.0–1.0 in
@@ -106,6 +105,10 @@ var gSwipeTracking: Bool = false
 /// Whether the intercepted swipe already fired its instant switch
 /// (fires once per gesture, on the first Changed with non-zero progress).
 var gSwipeFired: Bool = false
+
+/// Whether an upward Mission Control swipe has been replaced and the rest of
+/// its physical event sequence must be swallowed.
+var gMissionControlSwipeTracking: Bool = false
 
 // MARK: - Statistics
 
@@ -162,8 +165,8 @@ enum Defaults {
     /// renaming the key would silently reset the opt-in for existing users.
     static let trackpadSwipe    = "spacerabbit.threeFingerSwipe"
     static let instantMissionControl = "spacerabbit.instantMissionControl"
-    /// A property-list dictionary containing the previous Dock value and an
-    /// explicit `wasSet` flag. It is absent when no restore cycle is pending.
+    /// Legacy cleanup record used only to restore the preference written by
+    /// early Instant Mission Control test builds.
     static let instantMissionControlBackup = "spacerabbit.instantMissionControlBackup"
     static let switchSpeed      = "spacerabbit.switchSpeed"
     static let switchCount      = "spacerabbit.switchCount"

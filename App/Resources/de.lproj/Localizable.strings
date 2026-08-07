@@ -102,7 +102,7 @@
 
 "settings.advanced.instantDockHide" = "Dock sofort ausblenden";
 "settings.advanced.instantMissionControl" = "Mission Control sofort öffnen";
-"settings.advanced.missionControlSubtitle" = "Öffnet Mission Control ohne die anfängliche Schiebeanimation. macOS kann diese undokumentierte Einstellung ignorieren.";
+"settings.advanced.missionControlSubtitle" = "Ersetzt die Aufwärtsgeste auf dem Trackpad und öffnet Mission Control sofort.";
 "settings.advanced.dockSubtitle" = "Dies ändert eine globale macOS-Einstellung.";
 "settings.advanced.resetToDefault" = "Auf Standardwert zurücksetzen";
 

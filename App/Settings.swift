@@ -1047,7 +1047,8 @@ final class FeaturesPaneController: SettingsPaneViewController {
 /// Dock appear and disappear instantly (no animation). Removing the key restores
 /// the system default behavior.
 ///
-/// Changes require a Dock restart to take effect (`killall Dock`).
+/// Dock autohide preference changes require a Dock restart to take effect
+/// (`killall Dock`). Mission Control gesture interception applies immediately.
 final class AdvancedPaneController: SettingsPaneViewController {
 
     override var paneTitle: String { SettingsPane.advanced.title }
@@ -1056,8 +1057,6 @@ final class AdvancedPaneController: SettingsPaneViewController {
     private var instantDockHideControl: NSSwitch!
     private var showMenuBarIconControl: NSSwitch!
     private var menuBarSubtitle:        NSTextField!
-    private var missionControlResetDivider: NSView!
-    private var missionControlResetRow:     NSView!
     private var dockResetDivider:       NSView!
     private var dockResetRow:           NSView!
 
@@ -1101,40 +1100,6 @@ final class AdvancedPaneController: SettingsPaneViewController {
         menuBarSubtitle.preferredMaxLayoutWidth = 240
         updateMenuBarSubtitle()
 
-        // Mission Control reset link (only visible while an override exists)
-        let missionControlResetBtn = LinkButton(
-            title: "", target: self, action: #selector(resetMissionControlToDefault)
-        )
-        missionControlResetBtn.isBordered = false
-        missionControlResetBtn.attributedTitle = NSAttributedString(string: L("settings.advanced.resetToDefault"), attributes: [
-            .font:            NSFont.systemFont(ofSize: 11),
-            .foregroundColor: NSColor.linkColor,
-        ])
-
-        let missionControlResetIcon = NSImageView()
-        missionControlResetIcon.image = NSImage(systemSymbolName: "arrow.clockwise",
-                                                accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .regular))
-        missionControlResetIcon.contentTintColor = .linkColor
-
-        let missionControlResetStack = NSStackView(views: [missionControlResetIcon, missionControlResetBtn])
-        missionControlResetStack.orientation = .horizontal
-        missionControlResetStack.spacing     = 2
-        missionControlResetStack.alignment   = .centerY
-        missionControlResetStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let missionControlResetRowView = NSView()
-        missionControlResetRowView.addSubview(missionControlResetStack)
-        NSLayoutConstraint.activate([
-            missionControlResetStack.trailingAnchor.constraint(equalTo: missionControlResetRowView.trailingAnchor,
-                                                                constant: -Layout.rowHorizontalPad),
-            missionControlResetStack.topAnchor.constraint(equalTo: missionControlResetRowView.topAnchor, constant: 4),
-            missionControlResetStack.bottomAnchor.constraint(equalTo: missionControlResetRowView.bottomAnchor, constant: -9),
-        ])
-
-        missionControlResetRow     = missionControlResetRowView
-        missionControlResetDivider = rowDivider()
-
         // "Reset to system default" link for Instant Dock hide (only visible when overridden)
         let resetBtn = LinkButton(title: "", target: self, action: #selector(resetDockToDefault))
         resetBtn.isBordered = false
@@ -1168,8 +1133,6 @@ final class AdvancedPaneController: SettingsPaneViewController {
         dockResetDivider = rowDivider()
 
         // Hidden by default; viewWillAppear sets the correct visibility
-        missionControlResetDivider.isHidden = true
-        missionControlResetRow.isHidden     = true
         dockResetDivider.isHidden = true
         dockResetRow.isHidden     = true
 
@@ -1179,8 +1142,6 @@ final class AdvancedPaneController: SettingsPaneViewController {
                 control:  instantMissionControlControl,
                 subtitle: missionControlSubtitle
             ),
-            missionControlResetDivider,
-            missionControlResetRow,
         ])
         let dockGroup = groupBox([
             settingsRow(
@@ -1203,7 +1164,6 @@ final class AdvancedPaneController: SettingsPaneViewController {
 
     override func syncFromGlobals() {
         instantMissionControlControl.state = gInstantMissionControlEnabled ? .on : .off
-        updateMissionControlResetLink()
         instantDockHideControl.state = isDockInstantHideEnabled() ? .on : .off
         let menuBarVisible = gMenu?.isMenuBarIconVisible
             ?? UserDefaults.standard.bool(forKey: Defaults.showMenuBarIcon)
@@ -1237,21 +1197,8 @@ final class AdvancedPaneController: SettingsPaneViewController {
         resizePaneToFit()
     }
 
-    /// Shows the Mission Control reset link while a Dock override or pending
-    /// restore record exists.
-    private func updateMissionControlResetLink() {
-        let hasOverride = hasInstantMissionControlOverride()
-        missionControlResetDivider.isHidden = !hasOverride
-        missionControlResetRow.isHidden     = !hasOverride
-        resizePaneToFit()
-    }
-
     @objc private func toggleInstantMissionControl() {
         setInstantMissionControlEnabled(instantMissionControlControl.state == .on)
-    }
-
-    @objc private func resetMissionControlToDefault() {
-        resetInstantMissionControlToDefault()
     }
 
     @objc private func toggleDockInstantHide() {
@@ -1266,6 +1213,24 @@ final class AdvancedPaneController: SettingsPaneViewController {
         instantDockHideControl.state = .off
         updateDockResetLink()
         promptDockRestart()
+    }
+
+    /// Prompts before restarting Dock so autohide preference changes are
+    /// picked up. Mission Control interception does not use this path.
+    private func promptDockRestart() {
+        let alert = NSAlert()
+        alert.messageText     = L("settings.advanced.dockRestart.title")
+        alert.informativeText = L("settings.advanced.dockRestart.message")
+        alert.addButton(withTitle: L("settings.advanced.dockRestart.confirm"))
+        alert.addButton(withTitle: L("common.later"))
+        alert.alertStyle = .informational
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let task = Process()
+            task.launchPath = "/usr/bin/killall"
+            task.arguments  = ["Dock"]
+            try? task.run()
+        }
     }
 
     /// Updates the menu bar row's subtitle to match the toggle state:

@@ -1,14 +1,14 @@
 /*
- * SwipeIntercept.swift — Feature 3: Instant trackpad swipe
+ * SwipeIntercept.swift — Instant trackpad gesture interception
  *
- * Removes the slide animation from real trackpad swipes.
+ * Removes the slide animation from real horizontal Space swipes and the
+ * upward Mission Control gesture.
  *
- * macOS turns a horizontal 3-finger (or 4-finger, per the trackpad
- * setting) swipe into private DockSwipe events — the same event family
- * Space Rabbit synthesizes for its other features. A second CGEvent tap
- * listens for those private gesture event types, swallows the user's
- * animated swipe as it begins, reads its direction from the first
- * progress sample, and re-posts it as an instant switch:
+ * macOS turns 3-finger (or 4-finger, per the trackpad setting) swipes into
+ * private DockSwipe events — the same event family Space Rabbit synthesizes
+ * for its other features. A second CGEvent tap listens for those private
+ * gesture event types and replaces supported physical gestures with complete
+ * synthetic gestures posted at their committed endpoint.
  *
  *   1. Began   — start tracking, swallow (the animated switch never starts)
  *   2. Changed — first non-zero progress reveals the direction; fire the
@@ -17,8 +17,11 @@
  *                skip Changed), use the final velocity's sign; reset
  *   4. Cancelled — reset without firing
  *
- * Companion generic gesture events paired with a tracked swipe are
- * swallowed too, so the Dock never sees any half of the real gesture.
+ * Horizontal swipes keep the existing direction-detection flow. An upward
+ * vertical swipe is identifiable from the Began event's swipe mask/flags, so
+ * its replacement is prepared and posted before the native transition gets
+ * a progress sample. Downward App Expose and Mission Control dismissal pass
+ * through unchanged.
  *
  * Because Space Rabbit's own synthetic gestures are posted into the same
  * session tap, they would loop right back into this tap. Every event we
@@ -43,20 +46,26 @@ import Foundation
 // MARK: - Constants
 
 /// Value of `kCGEventGestureSwipeMotion` identifying a horizontal swipe.
-/// Vertical swipes (Mission Control / App Exposé) carry other values and
-/// are never intercepted.
 private let kGestureMotionHorizontal: Int64 = 1
+
+/// Value identifying the vertical DockSwipe family used by Mission Control
+/// and App Exposé.
+private let kGestureMotionVertical: Int64 = 2
+
+/// IOHID swipe-mask bit identifying the upward (Mission Control) direction.
+private let kSwipeMaskUp: Int64 = 1
 
 // MARK: - Tap Lifecycle
 
 /// Creates or tears down the swipe-intercept tap to match the current
-/// feature state (`gEnabled && gTrackpadSwipeEnabled`).
+/// feature state (`gEnabled` and either gesture feature enabled).
 ///
 /// Called at startup and from every place that flips either toggle (the
 /// menu bar dropdown, the master switch, and the settings window). Safe to
 /// call redundantly — it no-ops when the tap already matches the state.
 func updateSwipeTap() {
-    let shouldRun = gEnabled && gTrackpadSwipeEnabled
+    let shouldRun = gEnabled
+        && (gTrackpadSwipeEnabled || gInstantMissionControlEnabled)
 
     if shouldRun, gSwipeTap == nil {
         let mask = CGEventMask((1 << UInt64(kCGSEventGesture))
@@ -97,8 +106,9 @@ func updateSwipeTap() {
 /// disable) — stale state from before the break must not leak into the
 /// next gesture.
 func resetSwipeIntercept() {
-    gSwipeTracking = false
-    gSwipeFired    = false
+    gSwipeTracking               = false
+    gSwipeFired                  = false
+    gMissionControlSwipeTracking = false
 }
 
 // MARK: - Synthetic Event Marking
@@ -167,17 +177,58 @@ func swipeTapCallback(proxy: CGEventTapProxy, type: CGEventType,
 
     let subtype = event.getIntegerValueField(kCGSEventTypeField)
 
-    // Feature gates. The tap is torn down when the feature is off, so
-    // these mostly guard the "Normal" speed tick (native animation wanted
-    // — let the real swipe through untouched) and toggle races.
-    guard gEnabled, gTrackpadSwipeEnabled, !isNativeSwitchSpeed() else {
+    // The tap is normally torn down while the master switch is off; this
+    // guard covers a toggle racing with event delivery.
+    guard gEnabled else {
+        resetSwipeIntercept()
+        return passthrough
+    }
+
+    // Once an upward swipe is claimed, swallow every remaining dock and
+    // companion event from that physical sequence. The synthetic replacement
+    // has already delivered its own complete Began/Changed/Ended sequence.
+    if gMissionControlSwipeTracking {
+        if subtype == kCGSEventDockControl {
+            let phase = event.getIntegerValueField(kCGEventGesturePhase)
+            if phase == kCGSGesturePhaseEnded || phase == kCGSGesturePhaseCancelled {
+                gMissionControlSwipeTracking = false
+            }
+            return nil
+        }
+        if subtype == kCGSEventGesture { return nil }
+    }
+
+    // Vertical DockSwipes use positive progress for upward Mission Control
+    // and negative progress for downward App Exposé. Only claim the upward
+    // Began event; once Mission Control is open, isMissionControlActive()
+    // makes dismissal gestures pass through untouched (issues #18 and #20).
+    if gInstantMissionControlEnabled,
+       subtype == kCGSEventDockControl,
+       event.getIntegerValueField(kCGEventGestureHIDType) == kIOHIDEventTypeDockSwipe,
+       event.getIntegerValueField(kCGEventGestureSwipeMotion) == kGestureMotionVertical,
+       event.getIntegerValueField(kCGEventGesturePhase) == kCGSGesturePhaseBegan,
+       isUpwardSwipe(event),
+       !isMissionControlActive() {
+        // postInstantMissionControlGesture() constructs every phase before it
+        // posts anything. If construction or augmentation fails, leave the
+        // physical Began untouched so macOS performs its native transition.
+        if postInstantMissionControlGesture() {
+            gMissionControlSwipeTracking = true
+            return nil
+        }
+        return passthrough
+    }
+
+    // Horizontal feature gates. Mission Control interception is independent
+    // from both this toggle and the Space transition-speed slider.
+    guard gTrackpadSwipeEnabled, !isNativeSwitchSpeed() else {
         gSwipeTracking = false
         gSwipeFired    = false
         return passthrough
     }
 
-    // Horizontal dock swipes only: vertical swipes (Mission Control,
-    // App Exposé) and every other gesture pass through unchanged.
+    // Horizontal dock swipes only; unclaimed vertical gestures and every
+    // other gesture pass through unchanged.
     if subtype == kCGSEventDockControl,
        event.getIntegerValueField(kCGEventGestureHIDType) == kIOHIDEventTypeDockSwipe,
        event.getIntegerValueField(kCGEventGestureSwipeMotion) == kGestureMotionHorizontal {
@@ -246,6 +297,21 @@ func swipeTapCallback(proxy: CGEventTapProxy, type: CGEventType,
     if subtype == kCGSEventGesture, gSwipeTracking { return nil }
 
     return passthrough
+}
+
+/// Returns whether a vertical Began event targets Mission Control (upward).
+///
+/// Current macOS releases expose direction in the IOHID swipe mask. Events
+/// that omit it encode a signed `Float` in field 135; its sign follows the
+/// same macOS 27 inversion as other real DockSwipes. An ambiguous Began is
+/// never intercepted.
+private func isUpwardSwipe(_ event: CGEvent) -> Bool {
+    let mask = event.getIntegerValueField(kCGEventGestureSwipeMask)
+    if mask != 0 { return mask & kSwipeMaskUp != 0 }
+
+    let rawFlags = event.getIntegerValueField(kCGEventScrollGestureFlagBits)
+    let flags = Float(bitPattern: UInt32(truncatingIfNeeded: rawFlags))
+    return requiresEventAugmentation() ? flags < 0 : flags > 0
 }
 
 // MARK: - Direction & Firing

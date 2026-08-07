@@ -101,11 +101,15 @@ final class SwoopMenu: NSObject {
             Defaults.instantSwitch:    true,
             Defaults.autoFollow:       true,
             Defaults.trackpadSwipe:    false,  // opt-in — swallows a real gesture
-            Defaults.instantMissionControl: false, // opt-in — changes Dock behavior
+            Defaults.instantMissionControl: false, // opt-in — intercepts an upward gesture
             Defaults.switchSpeed:      1.0,
             Defaults.switchCount:      0,
             Defaults.showMenuBarIcon:  true,
         ])
+
+        // Early issue #28 builds wrote an obsolete Dock preference. Restore
+        // its saved value before loading the event-based replacement.
+        restoreLegacyMissionControlPreferenceIfNeeded()
 
         // Load persisted state from UserDefaults into the global variables
         // that drive runtime behavior

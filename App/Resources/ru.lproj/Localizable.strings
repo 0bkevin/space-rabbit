@@ -108,7 +108,7 @@
 
 "settings.advanced.instantDockHide" = "Мгновенное скрытие Dock";
 "settings.advanced.instantMissionControl" = "Мгновенный Mission Control";
-"settings.advanced.missionControlSubtitle" = "Открывает Mission Control без начальной анимации сдвига. macOS может проигнорировать эту недокументированную настройку.";
+"settings.advanced.missionControlSubtitle" = "Заменяет жест вверх на трекпаде и мгновенно открывает Mission Control.";
 "settings.advanced.dockSubtitle" = "Это изменяет глобальную настройку macOS.";
 "settings.advanced.resetToDefault" = "Вернуть стандартное значение";
 

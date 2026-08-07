@@ -42,6 +42,10 @@ private let kInstantSwitchVelocity: Double = 400.0
 /// progress move right, positive move left.
 private let kAugmentedInstantVelocity: Double = 9999.0
 
+/// DockSwipe motion and IOHID mask values for opening Mission Control.
+private let kGestureMotionVertical: Int64 = 2
+private let kIOHIDSwipeUp: Int64 = 1
+
 /// Velocity range for animated (non-instant) switches, mapped from the
 /// user's transition-speed slider. Calibrated against InstantSpaceSwitcher's
 /// speed presets (Fast=50, Faster=60, Fastest=80): the slider's animated
@@ -756,6 +760,104 @@ private func augmentDockSwipeEvent(_ event: CGEvent) -> CGEvent? {
     bytes.append(payload)
 
     return CGEvent(withDataAllocator: kCFAllocatorDefault, data: bytes as CFData)
+}
+
+// MARK: - Instant Mission Control Gesture
+
+/// Creates one phase of an upward vertical DockSwipe at its committed
+/// endpoint. Pre-27 trackpad captures use positive progress for Mission
+/// Control and carry the same signed velocity on both axes when ending. The
+/// macOS 27+ augmented path uses that release's inverted posting sign, matching
+/// the horizontal augmented gesture immediately below.
+///
+/// On macOS 27+, the extra mirrored fields are included before field 4205 is
+/// generated. Earlier releases ignore those requirements and receive the bare
+/// event, matching Space Rabbit's existing version split for horizontal swipes.
+private func makeMissionControlDockEvent(phase: Int64,
+                                         augmented: Bool) -> CGEvent? {
+    guard let event = CGEvent(source: nil) else { return nil }
+
+    let sign = augmented ? -1.0 : 1.0
+    // macOS 27 validates non-zero progress on every augmented phase. Earlier
+    // Docks accept a zero-progress Began, matching a physical vertical swipe.
+    let progress = !augmented && phase == kCGSGesturePhaseBegan ? 0.0 : sign
+    let velocity = sign * (augmented
+        ? kAugmentedInstantVelocity : kInstantSwitchVelocity)
+
+    event.setIntegerValueField(kCGSEventTypeField, value: kCGSEventDockControl)
+    event.setIntegerValueField(kCGEventGestureHIDType, value: kIOHIDEventTypeDockSwipe)
+    event.setIntegerValueField(kCGEventGesturePhase, value: phase)
+    event.setIntegerValueField(kCGEventGestureSwipeMotion, value: kGestureMotionVertical)
+    event.setIntegerValueField(kCGEventGestureSwipeMask, value: kIOHIDSwipeUp)
+    event.setDoubleValueField(kCGEventGestureSwipeProgress, value: progress)
+
+    if phase == kCGSGesturePhaseEnded {
+        event.setDoubleValueField(kCGEventGestureSwipeVelocityX, value: velocity)
+        event.setDoubleValueField(kCGEventGestureSwipeVelocityY, value: velocity)
+    }
+
+    if augmented {
+        event.setIntegerValueField(kCGEventGesturePhase2, value: phase)
+        event.setDoubleValueField(kCGEventGestureFlavor,
+                                  value: Double(kIOHIDGestureFlavorDockPrimary))
+        event.setDoubleValueField(kCGEventGestureTimestamp,
+                                  value: Double(mach_absolute_time()))
+        event.setDoubleValueField(kCGEventGesturePositionY, value: 0.1)
+    } else {
+        event.setIntegerValueField(kCGEventScrollGestureFlagBits, value: 1)
+        event.setDoubleValueField(kCGEventGestureScrollY, value: 0)
+        event.setDoubleValueField(
+            kCGEventGestureZoomDeltaX,
+            value: 2.0 * Double(Float.leastNonzeroMagnitude)
+        )
+    }
+
+    return event
+}
+
+/// Posts an immediate upward gesture that opens Mission Control.
+///
+/// Every phase and companion envelope is allocated (and, on macOS 27+,
+/// augmented) before the first event is posted. This all-or-nothing setup lets
+/// the interceptor safely fall back to the untouched physical gesture if any
+/// private event operation fails.
+///
+/// - Returns: `true` after the full Began/Changed/Ended sequence was posted;
+///            otherwise `false` without posting any partial sequence.
+func postInstantMissionControlGesture() -> Bool {
+    let needsAugmentation = requiresEventAugmentation()
+    let phases = [kCGSGesturePhaseBegan, kCGSGesturePhaseChanged,
+                  kCGSGesturePhaseEnded]
+    var events = [(dock: CGEvent, gesture: CGEvent)]()
+
+    for phase in phases {
+        guard let rawDock = makeMissionControlDockEvent(
+            phase: phase,
+            augmented: needsAugmentation
+        ) else { return false }
+
+        // The marker must be serialized into the rebuilt event on macOS 27+.
+        markSyntheticGesture(rawDock)
+
+        let dock: CGEvent
+        if needsAugmentation {
+            guard let augmented = augmentDockSwipeEvent(rawDock) else { return false }
+            dock = augmented
+        } else {
+            dock = rawDock
+        }
+
+        guard let gesture = CGEvent(source: nil) else { return false }
+        gesture.setIntegerValueField(kCGSEventTypeField, value: kCGSEventGesture)
+        markSyntheticGesture(gesture)
+        events.append((dock, gesture))
+    }
+
+    for (dock, gesture) in events {
+        dock.post(tap: .cgSessionEventTap)
+        gesture.post(tap: .cgSessionEventTap)
+    }
+    return true
 }
 
 /// Creates one phase of the macOS 27 dock swipe, with the extra fields

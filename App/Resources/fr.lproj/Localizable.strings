@@ -107,7 +107,7 @@
 
 "settings.advanced.instantDockHide" = "Masquage instantané du Dock";
 "settings.advanced.instantMissionControl" = "Mission Control instantané";
-"settings.advanced.missionControlSubtitle" = "Ouvre Mission Control sans l’animation de glissement initiale. macOS peut ignorer ce réglage non documenté.";
+"settings.advanced.missionControlSubtitle" = "Remplace le geste vers le haut du trackpad et ouvre Mission Control immédiatement.";
 "settings.advanced.dockSubtitle" = "Ceci modifie un réglage global de macOS.";
 "settings.advanced.resetToDefault" = "Rétablir la valeur par défaut";
 

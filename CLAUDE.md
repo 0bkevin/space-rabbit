@@ -35,13 +35,13 @@ Exact initialization order — getting this wrong causes subtle bugs:
 6. `checkForUpdatesAutomatically()` — owns its own 5-second delay, and applies it only when it is actually going to make a network request (a throttled launch restores the update banner from UserDefaults immediately). Must run after step 5, which creates `gMenu`, the banner's host
 7. `Timer` for `flushSwitchCount()` — every 300 seconds
 8. **Event tap creation** — `CGEvent.tapCreate` → `CFMachPortCreateRunLoopSource` → `CFRunLoopAddSource`
-9. **Swipe-intercept tap** — `updateSwipeTap()` installs the Feature 3 tap if the persisted toggle is on (must run after step 5, which loads the toggles; creation failure is non-fatal, unlike step 8)
+9. **Swipe-intercept tap** — `updateSwipeTap()` installs the shared gesture tap if either persisted gesture toggle is on (must run after step 5, which loads the toggles; creation failure is non-fatal, unlike step 8)
 10. **SwoopObserver registration** — `didActivateApplicationNotification` + `activeSpaceDidChangeNotification`
 11. **Cleanup handler** — `willTerminateNotification`: flush stats, remove observer, disable both taps
 12. **Signal handlers** — SIGINT/SIGTERM → `NSApp.terminate`
 13. `app.run()` — enter run loop
 
-## Three core features
+## Core features
 
 ### Feature 1: Instant space switch (`eventTapCallback` in `EventTap.swift`)
 
@@ -127,10 +127,10 @@ and fired a second switch from its `±kInstantSwitchVelocity` sign — a cascade
 looks exactly like a direction bug.
 
 **Tap lifecycle** — unlike the keyboard tap (installed once at startup), this tap is
-created/torn down on demand by `updateSwipeTap()` so it only exists while
-`gEnabled && gTrackpadSwipeEnabled`. Called from startup, `SwoopMenu.setEnabled`,
-and both feature toggles (menu + settings). The "Normal" speed tick is gated inside
-the callback (`isNativeSwitchSpeed()` → everything passes through untouched).
+created/torn down on demand by `updateSwipeTap()` so it only exists while `gEnabled`
+and either gesture feature is enabled. Called from startup, `SwoopMenu.setEnabled`,
+and both features' toggles (menu + settings). The "Normal" speed tick gates only
+horizontal Space swipes; Instant Mission Control remains independent.
 
 ### Feature interaction (suppression guard)
 
@@ -171,30 +171,36 @@ once an action is about to happen, never per event:
 
 - **Feature 1** — after a shortcut has matched (both the left/right bindings and
   the "Switch to Desktop N" loop), not for every `keyDown`.
-- **Feature 3** — on the Began phase only. Standing down means *not tracking* the
+- **Feature 3 / Instant Mission Control** — on the Began phase only. Standing down means *not tracking* the
   gesture, so all later phases pass through via the existing `gSwipeTracking`
   checks, one lookup per swipe instead of one per sample.
 - **Feature 2** — after the speed and suppression-window guards, before the
   window-to-space lookups.
 
-### Optional Instant Mission Control (`DockPreferences.swift`)
+### Optional Instant Mission Control (`SwipeIntercept.swift`)
 
-This is separate from the three input features above. When enabled, the app
-writes the undocumented `expose-animation-duration` preference in the
-`com.apple.dock` domain to a conservative near-zero value. It does not
-intercept vertical gestures or alter Mission Control's controls after the
-overview opens, and macOS may ignore the preference while retaining native
-behavior.
+The upward Mission Control gesture is a vertical DockSwipe (`motion = 2`) with
+the `kIOHIDSwipeUp` mask. When enabled, its Began event is replaced by an
+immediate synthetic Began+Changed+Ended sequence whose Changed phase is already
+at its committed progress (`+1.0` before macOS 27, `-1.0` on the inverted 27+
+posting path). The Ended phase carries the same signed velocity on both X and Y,
+matching physical vertical captures. This commits the interactive transition
+before a slide is displayed; Mission Control itself is unchanged.
 
-Before the first write in an enable cycle, the previous Dock value is saved in
-one `UserDefaults` property-list record with an explicit `wasSet` flag. Repeated
-syncs never replace that record. Disabling restores the saved value (including
-removing the key when it was previously unset); the explicit reset action
-instead removes the key to return to the system default. Both clear the record
-and ask for confirmation before running `/usr/bin/killall Dock`.
-Choosing “Later” leaves the preference pending restart, matching Instant Dock
-hide. The feature is opt-in and has its own menu and Advanced-pane toggles;
-horizontal trackpad swipe handling remains independent.
+All phases and companion envelopes are created before the real Began is
+swallowed. On macOS 27+, each dock event is also rebuilt with the validated
+field-4205 IOHID payload. Any allocation/augmentation failure returns `false`
+without posting a partial sequence, so the original physical gesture passes to
+macOS. Ambiguous and downward vertical gestures pass through as well. Once an
+upward sequence is claimed, its remaining physical dock/envelope events are
+swallowed until Ended/Cancelled. `isMissionControlActive()` prevents interception
+after the overview opens, preserving native dismissal and the issue #18/#20
+stand-down behavior.
+
+The feature is opt-in and independent from horizontal trackpad swipes and the
+Space transition-speed slider. `DockPreferences.swift` now only restores the
+legacy `expose-animation-duration` value saved by early issue #28 test builds;
+the active feature writes no macOS preference and needs no Dock restart.
 
 ## Private APIs in use (`PrivateAPI.swift`)
 
@@ -304,12 +310,13 @@ All runtime state is module-level globals (not a singleton class). This is inten
 | Variable | Type | Purpose |
 |---|---|---|
 | `gTap` | `CFMachPort?` | The active CGEvent tap (keyboard, Feature 1) |
-| `gSwipeTap` / `gSwipeTapSource` | `CFMachPort?` / `CFRunLoopSource?` | Swipe-intercept tap (Feature 3) — exists only while the feature is active (`updateSwipeTap()`) |
+| `gSwipeTap` / `gSwipeTapSource` | `CFMachPort?` / `CFRunLoopSource?` | Gesture-intercept tap — exists only while at least one gesture feature is active (`updateSwipeTap()`) |
 | `gEnabled` | `Bool` | Master on/off toggle |
 | `gInstantSwitchEnabled` | `Bool` | Feature 1 toggle |
 | `gAutoFollowEnabled` | `Bool` | Feature 2 toggle |
 | `gTrackpadSwipeEnabled` | `Bool` | Feature 3 toggle (default **false** — opt-in) |
-| `gSwipeTracking` / `gSwipeFired` | `Bool` | Per-gesture state of the swipe intercept (reset via `resetSwipeIntercept()`) |
+| `gInstantMissionControlEnabled` | `Bool` | Upward Mission Control gesture toggle (default **false** — opt-in) |
+| `gSwipeTracking` / `gSwipeFired` / `gMissionControlSwipeTracking` | `Bool` | Per-gesture state of the swipe intercept (reset via `resetSwipeIntercept()`) |
 | `gSwitchSpeed` | `Double` | Transition speed slider tick (0.0–1.0 in 0.25 steps; 0.0 = native macOS animation, 1.0 = instant) |
 | `gLastSpaceSwitchTime` | `Date` | For auto-follow suppression (initialized to `.distantPast`). Stamped by Features 1/3 and by non-auto-follow space changes |
 | `gLastFollowedPid` / `gLastFollowedTime` | `pid_t` / `Date` | Last app auto-follow chased — the echo guard's scope (`-1` = none) |
@@ -322,7 +329,7 @@ All runtime state is module-level globals (not a singleton class). This is inten
 
 ### UserDefaults keys (`Defaults` enum)
 
-`spacerabbit.enabled`, `spacerabbit.instantSwitch`, `spacerabbit.autoFollow`, `spacerabbit.threeFingerSwipe` (the "Instant Trackpad Swipe" toggle — legacy spelling kept deliberately, see `Defaults.trackpadSwipe`), `spacerabbit.switchSpeed`, `spacerabbit.switchCount`, `spacerabbit.showMenuBarIcon`,
+`spacerabbit.enabled`, `spacerabbit.instantSwitch`, `spacerabbit.autoFollow`, `spacerabbit.threeFingerSwipe` (the "Instant Trackpad Swipe" toggle — legacy spelling kept deliberately, see `Defaults.trackpadSwipe`), `spacerabbit.instantMissionControl`, `spacerabbit.switchSpeed`, `spacerabbit.switchCount`, `spacerabbit.showMenuBarIcon`,
 `spacerabbit.lastUpdateCheck`, `spacerabbit.pendingUpdateVersion`,
 `spacerabbit.pendingUpdateURL` (the last three belong to the update throttle — see
 "Update flow"; none has a `g` global, they are read and written where they are used).
@@ -338,13 +345,14 @@ Persistence strategy: `flushSwitchCount()` writes to disk only if `gSwitchCount 
 | `kSLSSpaceTypeAll` | SpaceSwitching | `7` (Int32) | Bitmask for "all space types" in SLS calls |
 | `kInstantSwitchProgress` | SpaceSwitching | `2.0` | Fully-committed swipe progress |
 | `kInstantSwitchVelocity` | SpaceSwitching | `400.0` | Velocity above Dock's instant threshold |
-| `kAugmentedInstantVelocity` | SpaceSwitching | `9999.0` | Instant velocity on the macOS 27+ augmented path (sign inverted: negative = right) |
+| `kAugmentedInstantVelocity` | SpaceSwitching | `9999.0` | Instant velocity on the macOS 27+ augmented path |
 | `kAnimatedVelocityMin/Max` | SpaceSwitching | `40.0` / `80.0` | Animated velocity band for the transition-speed slider (from InstantSpaceSwitcher's presets). `currentSwitchVelocity()` interpolates the Fast/Faster/Fastest ticks to 50/60/70, or returns `kInstantSwitchVelocity` at the "Instant" end cap. At the "Normal" tick `isNativeSwitchSpeed()` is true and **no gestures are posted at all** — the event tap passes shortcuts through and auto-follow stands down, giving macOS's native animation |
 | `kAutoFollowSuppressionWindow` | AutoFollow | `0.3` (TimeInterval) | Grace period after a *user-driven* space switch before auto-follow kicks in |
 | `kAutoFollowEchoWindow` | AutoFollow | `0.3` (TimeInterval) | Window in which a repeat activation of the **same** app reads as the echo of our own follow |
 | `kAutoFollowSelfChangeWindow` | AutoFollow | `1.5` (TimeInterval) | How long `gAutoFollowTargetSpace` stays credible as the cause of a space-change notification |
 | `kMissionControlWindowLayer` | SpaceSwitching | `18` (Int32) | `kCGWindowLayer` of the Dock's overview overlay — the Mission Control marker |
-| `kGestureMotionHorizontal` | SwipeIntercept | `1` (Int64) | `kCGEventGestureSwipeMotion` value of a horizontal swipe (vertical swipes pass through) |
+| `kGestureMotionHorizontal` / `kGestureMotionVertical` | SwipeIntercept | `1` / `2` (Int64) | `kCGEventGestureSwipeMotion` values used to distinguish Space and Mission Control swipes |
+| `kSwipeMaskUp` | SwipeIntercept | `1` (Int64) | IOHID direction mask used to claim only the upward Mission Control gesture |
 | `kSyntheticGestureMarker` | SwipeIntercept | `0x53504152` ('SPAR') | Stamped into `.eventSourceUserData` on every gesture Space Rabbit posts, so the swipe tap passes its own events through |
 | `kCGSGesturePhaseCancelled` | PrivateAPI | `8` (Int64) | Gesture phase seen only by the swipe-intercept tap |
 | `kCursorWarpRestoreDelay` | SpaceSwitching | `0.15` (TimeInterval) | How long the cursor stays parked on the target display after a cross-display warp switch (the Dock samples the cursor asynchronously) |
@@ -415,8 +423,8 @@ Toggles can be changed from two places. The sync pattern:
 2. **Settings window** → `FeaturesPaneController.toggleInstantSwitch`/`toggleAutoFollow`/`toggleTrackpadSwipe`: writes `gXxxEnabled` → `UserDefaults` → calls `gMenu?.syncMenuItems()` to sync menu checkmarks
 3. **Settings pane appears** (`viewWillAppear`, fires on every pane swap): refreshes its switch controls from globals
 
-The trackpad swipe toggle additionally calls `updateSwipeTap()` from both places (its
-tap only exists while the feature is active).
+Both gesture toggles additionally call `updateSwipeTap()` from both places (the
+shared tap only exists while at least one gesture feature is active).
 
 Master enable/disable (`gEnabled`) is only togglable from the menu bar (header-row switch or right-click on the icon; both go through `setEnabled`, which keeps the switch state in sync and calls `updateSwipeTap()`).
 
@@ -765,11 +773,11 @@ App/
   SpaceSwitching.swift  — space queries, synthetic gesture posting, navigation
   EventTap.swift        — CGEvent tap callback (Feature 1: instant switch)
   AutoFollow.swift      — app-activation observer (Feature 2: auto-follow)
-  SwipeIntercept.swift  — gesture tap intercepting real trackpad swipes
-                          (Feature 3: instant trackpad swipe)
+  SwipeIntercept.swift  — shared gesture tap for horizontal Space swipes and
+                          upward Instant Mission Control
   MenuBar.swift         — SwoopMenu status item and dropdown menu
   Settings.swift        — preferences window and all settings panes
-  DockPreferences.swift  — optional Dock preference backup/restore and restart confirmation
+  DockPreferences.swift — one-time cleanup for the early issue #28 test build
   UpdateCheck.swift     — GitHub release version checking
   UpdateInstall.swift   — automatic update download, DMG install, and restart
   Info.plist            — bundle metadata (version placeholder: __VERSION__)
